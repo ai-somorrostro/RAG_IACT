@@ -1,0 +1,5 @@
+pymupdf4llm 
+sentence-transformers
+transformers 
+torch 
+accelerate
