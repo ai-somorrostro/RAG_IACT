@@ -38,6 +38,26 @@ La primera ejecución convierte el PDF a Markdown (`ict2_reglamento.md`) y const
 
 Las siguientes ejecuciones reutilizan los archivos generados, por lo que arrancan mucho antes.
 
+Después de cada respuesta aparece un bloque `Fuentes:` con los fragmentos del reglamento que se han usado para generarla. Cada línea muestra el número de fragmento, su similitud con la pregunta (de 0 a 1) y un extracto de sus primeros caracteres. Sirve para comprobar de dónde sale cada dato y detectar si el modelo se ha inventado algo:
+
+```
+Fuentes:
+  [1] Fragmento 42 (similitud 0.67): Artículo 3. Ámbito de aplicación. Este reglamento se aplica a...
+  [2] Fragmento 43 (similitud 0.61): ...
+```
+
+Si ni siquiera el fragmento más parecido alcanza el umbral de similitud (`UMBRAL_SIMILITUD`), el modelo no llega a ejecutarse y aparece el mensaje *"No he encontrado información relevante en el reglamento para esa pregunta. Prueba a reformularla con términos del reglamento."*, seguido igualmente de las fuentes para que se vea por qué se ha descartado. Suele pasar con preguntas ajenas al ICT2 o formuladas con palabras muy distintas a las del reglamento.
+
+## Personalización
+
+Los parámetros se ajustan en la sección `CONFIGURACIÓN` al principio de `rag.py`:
+
+| Constante | Valor por defecto | Descripción |
+|---|---|---|
+| `EMBEDDING_MODEL` | `paraphrase-multilingual-MiniLM-L12-v2` | Modelo con el que se vectorizan fragmentos y preguntas. Si lo cambias, borra `ict2_index.pt` para regenerar el índice. |
+| `LLM_MODEL` | `Qwen/Qwen2.5-1.5B-Instruct` | Modelo que genera las respuestas. |
+| `UMBRAL_SIMILITUD` | `0.3` | Similitud mínima que debe tener el mejor fragmento para responder. Subirlo hace al asistente más estricto (responde menos, pero con fragmentos más relevantes); bajarlo hace que responda más aunque los fragmentos encajen peor. |
+
 ## Estructura del proyecto
 
 | Archivo | Descripción |
@@ -56,4 +76,4 @@ El RAG se divide en tres apartados:
 
 1. **Preparación del Markdown**: `pymupdf4llm` convierte el PDF en Markdown.
 2. **Indexación**: el Markdown se divide en fragmentos de hasta 1200 caracteres con un solapamiento de 200 y se vectorizan con `paraphrase-multilingual-MiniLM-L12-v2`.
-3. **Modelo**: para cada pregunta se recuperan los 3 fragmentos más similares y se genera la respuesta con `Qwen/Qwen2.5-1.5B-Instruct`.
+3. **Modelo**: para cada pregunta se recuperan los 3 fragmentos más similares. Si el mejor no supera `UMBRAL_SIMILITUD`, se descarta la pregunta sin llamar al modelo; en caso contrario, se genera la respuesta con `Qwen/Qwen2.5-1.5B-Instruct` y se muestran los fragmentos usados como fuentes.
