@@ -3,35 +3,32 @@ import re
 import torch
 import pymupdf4llm
 from sentence_transformers import SentenceTransformer, util
-from transformers import pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer
 
 # --- CONFIGURACIÓN ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PDF_PATH = os.path.join(BASE_DIR, "f_ict2_reglamento_boe2014.pdf")  # Ajusta el nombre si es distinto
+PDF_PATH = os.path.join(BASE_DIR, "f_ict2_reglamento_boe2014.pdf")
 MD_PATH = os.path.join(BASE_DIR, "ict2_reglamento.md")
 CACHE_PATH = os.path.join(BASE_DIR, "ict2_index.pt")
 
 EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
-LLM_MODEL = "Qwen/Qwen2.5-3B-Instruct"
+LLM_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 
 
 def pdf_a_markdown(pdf_path: str, md_path: str) -> str:
-    """Convierte el PDF a Markdown preservando encabezados y tablas."""
     if os.path.exists(md_path):
         print(f"Cargando Markdown existente desde '{md_path}'...")
         with open(md_path, "r", encoding="utf-8") as f:
             return f.read()
 
-    print(f"Convirtiendo '{pdf_path}' (200 páginas) a Markdown. Esto tardará unos segundos...")
+    print(f"Convirtiendo '{pdf_path}' a Markdown...")
     md_text = pymupdf4llm.to_markdown(pdf_path)
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_text)
-    print(f"Archivo Markdown guardado en '{md_path}'.")
     return md_text
 
 
-def dividir_markdown(texto_md: str, max_chars: int = 1400, overlap: int = 250) -> list[str]:
-    """Divide el Markdown en fragmentos respetando bloques de párrafos y tablas."""
+def dividir_markdown(texto_md: str, max_chars: int = 1200, overlap: int = 200) -> list[str]:
     bloques = re.split(r"\n{2,}", texto_md)
     chunks = []
     actual = ""
@@ -46,7 +43,6 @@ def dividir_markdown(texto_md: str, max_chars: int = 1400, overlap: int = 250) -
         else:
             if actual:
                 chunks.append(actual)
-            # Si un bloque (ej. una tabla grande) supera max_chars, se trocea con solapamiento
             if len(bloque) > max_chars:
                 inicio = 0
                 while inicio < len(bloque):
@@ -59,51 +55,53 @@ def dividir_markdown(texto_md: str, max_chars: int = 1400, overlap: int = 250) -
 
     if actual:
         chunks.append(actual)
-
     return chunks
 
 
 def cargar_o_crear_indice(embedder: SentenceTransformer):
-    """Genera o carga los vectores del documento para evitar recalcular en cada ejecución."""
     if os.path.exists(CACHE_PATH):
         print("Cargando índice vectorial desde caché...")
-        datos = torch.load(CACHE_PATH, weights_only=False)
-        return datos["chunks"], datos["embeddings"]
+        datos = torch.load(CACHE_PATH, map_location="cpu", weights_only=False)
+        return datos["chunks"], datos["embeddings"].cpu()
 
     texto_md = pdf_a_markdown(PDF_PATH, MD_PATH)
     chunks = dividir_markdown(texto_md)
-    print(f"Vectorizando {len(chunks)} fragmentos del reglamento ICT2...")
-    embeddings = embedder.encode(chunks, convert_to_tensor=True, show_progress_bar=True)
+    print(f"Vectorizando {len(chunks)} fragmentos...")
+    embeddings = embedder.encode(chunks, convert_to_tensor=True, show_progress_bar=True).cpu()
 
     torch.save({"chunks": chunks, "embeddings": embeddings}, CACHE_PATH)
     return chunks, embeddings
 
 
-def recuperar_contexto(pregunta: str, embedder: SentenceTransformer, chunks: list[str], embeddings, top_k: int = 4) -> str:
-    """Busca los fragmentos más similares semánticamente a la pregunta."""
-    query_emb = embedder.encode(pregunta, convert_to_tensor=True)
+def recuperar_contexto(pregunta: str, embedder: SentenceTransformer, chunks: list[str], embeddings, top_k: int = 3) -> str:
+    query_emb = embedder.encode([str(pregunta)], convert_to_tensor=True).cpu()
     resultados = util.semantic_search(query_emb, embeddings, top_k=top_k)[0]
 
-    fragmentos_relevantes = []
+    fragmentos = []
     for hit in resultados:
         idx = hit["corpus_id"]
         score = hit["score"]
-        fragmentos_relevantes.append(f"[Fragmento {idx} | Similitud: {score:.2f}]\n{chunks[idx]}")
+        fragmentos.append(f"[Fragmento {idx} | Similitud: {score:.2f}]\n{chunks[idx]}")
 
-    return "\n\n---\n\n".join(fragmentos_relevantes)
+    return "\n\n---\n\n".join(fragmentos)
 
 
 def main():
     print("Inicializando modelos...")
-    embedder = SentenceTransformer(EMBEDDING_MODEL)
+    embedder = SentenceTransformer(EMBEDDING_MODEL, device="cpu")
     chunks, embeddings = cargar_o_crear_indice(embedder)
 
-    generator = pipeline(
-        "text-generation",
-        model=LLM_MODEL,
-        device_map="auto",
-        dtype="auto",
-    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    print(f"Cargando {LLM_MODEL} en {device} ({dtype})...")
+
+    tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL)
+    model = AutoModelForCausalLM.from_pretrained(
+        LLM_MODEL,
+        dtype=dtype,
+    ).to(device)
+
+    streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
     print("\n" + "=" * 60)
     print("RAG ICT2 (RD 346/2011) listo. Escribe 'salir' para terminar.")
@@ -117,33 +115,38 @@ def main():
             print("Cerrando asistente.")
             break
 
-        # 1. Recuperación (Retrieval)
-        contexto = recuperar_contexto(pregunta, embedder, chunks, embeddings, top_k=4)
+        contexto = recuperar_contexto(pregunta, embedder, chunks, embeddings, top_k=3)
 
-        # 2. Construcción del prompt estructurado
         mensajes = [
             {
                 "role": "system",
                 "content": (
                     "Eres un ingeniero experto en el Reglamento ICT2 (Real Decreto 346/2011 y Orden ITC/1644/2011). "
-                    "Responde de forma precisa y técnica basándote EXCLUSIVAMENTE en el contexto proporcionado. "
-                    "Si el dato no aparece en el contexto, di que no consta en los fragmentos recuperados."
+                    "Responde de forma precisa y concisa basándote EXCLUSIVAMENTE en el contexto proporcionado. "
+                    "Si el dato no aparece en el contexto, indica que no consta en los fragmentos recuperados."
                 ),
             },
             {
                 "role": "user",
-                "content": f"Contexto del reglamento (Markdown):\n\n{contexto}\n\nPregunta: {pregunta}",
+                "content": f"Contexto del reglamento:\n\n{contexto}\n\nPregunta: {pregunta}",
             },
         ]
 
-        # 3. Generación (Generation)
-        salida = generator(
+        texto_entrada = tokenizer.apply_chat_template(
             mensajes,
-            max_new_tokens=450,
-            do_sample=False,
+            tokenize=False,
+            add_generation_prompt=True,
         )
-        respuesta = salida[0]["generated_text"][-1]["content"]
-        print(f"\nRespuesta:\n{respuesta}")
+        inputs = tokenizer([texto_entrada], return_tensors="pt").to(device)
+
+        print("\nRespuesta:")
+        with torch.no_grad():
+            model.generate(
+                **inputs,
+                max_new_tokens=350,
+                do_sample=False,
+                streamer=streamer,
+            )
 
 
 if __name__ == "__main__":
