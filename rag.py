@@ -74,6 +74,7 @@ def cargar_o_crear_indice(embedder: SentenceTransformer):
     return chunks, embeddings
 
 
+def recuperar_contexto(pregunta: str, embedder: SentenceTransformer, chunks: list[str], embeddings, top_k: int = 3) -> str:
 def recuperar_contexto(pregunta: str, embedder: SentenceTransformer, chunks: list[str], embeddings, top_k: int = 3) -> tuple[str, list[dict]]:
     query_emb = embedder.encode([str(pregunta)], convert_to_tensor=True).cpu()
     resultados = util.semantic_search(query_emb, embeddings, top_k=top_k)[0]
@@ -84,6 +85,7 @@ def recuperar_contexto(pregunta: str, embedder: SentenceTransformer, chunks: lis
         score = hit["score"]
         fragmentos.append(f"[Fragmento {idx} | Similitud: {score:.2f}]\n{chunks[idx]}")
 
+    return "\n\n---\n\n".join(fragmentos)
     return "\n\n---\n\n".join(fragmentos), resultados
 
 
@@ -125,6 +127,7 @@ def main():
             print("Cerrando asistente.")
             break
 
+        contexto = recuperar_contexto(pregunta, embedder, chunks, embeddings, top_k=3)
         contexto, resultados = recuperar_contexto(pregunta, embedder, chunks, embeddings, top_k=3)
 
         if not resultados or resultados[0]["score"] < UMBRAL_SIMILITUD:
