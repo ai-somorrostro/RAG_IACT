@@ -35,6 +35,8 @@ La primera vez tarda varios minutos, porque descarga los modelos y prepara el PD
 
 Después de cada respuesta aparecen las **fuentes**: los fragmentos del reglamento que se han usado, con su similitud. Si la pregunta no tiene relación con el reglamento, el asistente avisa en lugar de inventarse una respuesta.
 
+Si la pregunta no trata sobre el reglamento, el asistente responde "Solo puedo responder preguntas sobre el Reglamento ICT2."
+
 **Ejemplos de preguntas:** ¿Qué es el RITI? · ¿Qué debe contener el proyecto técnico de una ICT?
 
 ## Problemas frecuentes
