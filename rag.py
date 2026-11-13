@@ -13,6 +13,7 @@ CACHE_PATH = os.path.join(BASE_DIR, "ict2_index.pt")
 
 EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 LLM_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+UMBRAL_SIMILITUD = 0.3
 
 
 def pdf_a_markdown(pdf_path: str, md_path: str) -> str:
@@ -74,6 +75,7 @@ def cargar_o_crear_indice(embedder: SentenceTransformer):
 
 
 def recuperar_contexto(pregunta: str, embedder: SentenceTransformer, chunks: list[str], embeddings, top_k: int = 3) -> str:
+def recuperar_contexto(pregunta: str, embedder: SentenceTransformer, chunks: list[str], embeddings, top_k: int = 3) -> tuple[str, list[dict]]:
     query_emb = embedder.encode([str(pregunta)], convert_to_tensor=True).cpu()
     resultados = util.semantic_search(query_emb, embeddings, top_k=top_k)[0]
 
@@ -84,6 +86,16 @@ def recuperar_contexto(pregunta: str, embedder: SentenceTransformer, chunks: lis
         fragmentos.append(f"[Fragmento {idx} | Similitud: {score:.2f}]\n{chunks[idx]}")
 
     return "\n\n---\n\n".join(fragmentos)
+    return "\n\n---\n\n".join(fragmentos), resultados
+
+
+def mostrar_fuentes(resultados: list[dict], chunks: list[str], max_chars: int = 150):
+    print("\nFuentes:")
+    for i, hit in enumerate(resultados, start=1):
+        idx = hit["corpus_id"]
+        texto = " ".join(chunks[idx].split())
+        extracto = texto[:max_chars].rstrip() + "..." if len(texto) > max_chars else texto
+        print(f"  [{i}] Fragmento {idx} (similitud {hit['score']:.2f}): {extracto}")
 
 
 def main():
@@ -116,6 +128,15 @@ def main():
             break
 
         contexto = recuperar_contexto(pregunta, embedder, chunks, embeddings, top_k=3)
+        contexto, resultados = recuperar_contexto(pregunta, embedder, chunks, embeddings, top_k=3)
+
+        if not resultados or resultados[0]["score"] < UMBRAL_SIMILITUD:
+            print(
+                "\nNo he encontrado información relevante en el reglamento para esa pregunta. "
+                "Prueba a reformularla con términos del reglamento."
+            )
+            mostrar_fuentes(resultados, chunks)
+            continue
 
         mensajes = [
             {
@@ -147,6 +168,8 @@ def main():
                 do_sample=False,
                 streamer=streamer,
             )
+
+        mostrar_fuentes(resultados, chunks)
 
 
 if __name__ == "__main__":
